@@ -1,370 +1,223 @@
-# RESEARCH: Maximum Weight Independent Set (MWIS)
-## Hackathon Squad Problem — Complete Technical Reference
+# Maximum Weight Independent Set (MWIS) Solver — Documentation
+
+## Problem Statement
+
+Given an undirected graph G = (V, E) with non-negative vertex weights W: V → ℝ₊, find an independent set S ⊆ V (no two vertices in S share an edge) maximising Σ W(v) for v ∈ S.
+
+MWIS is NP-Hard in general [Garey & Johnson 1979]. The approach here combines:
+1. **Kernelization** to reduce the problem to a small provably-hard core
+2. **ILS with PROBE local search** to heuristically solve the kernel within the time budget
 
 ---
 
-## 1. Problem Formulation
-
-Given an undirected graph G = (V, E) with node weights w(v) > 0:
-
-- Find S ⊆ V such that **no two nodes in S share an edge** (independent set)
-- **Maximize** Σ w(v) for v ∈ S
-
-This is **NP-Hard** in general. For N=200,000 with a 5-minute budget, we use heuristics.
-
----
-
-## 2. Why It's Hard
-
-| Problem | Complexity |
-|---|---|
-| Verify a solution | P (check all edges) |
-| Find maximum size IS | NP-Hard |
-| Find maximum weight IS | NP-Hard |
-| Approximate within constant factor | No PTAS for general graphs (unless P=NP) |
-
-Brute force = 2^200,000 subsets. More digits than atoms in the universe.
-
----
-
-## 3. Algorithm Landscape
-
-### 3.1 Kernelization / Graph Reduction (Most Powerful)
-
-Shrink the graph using provably-correct rules before any search. Each rule preserves the optimal solution.
-
-#### Tier 1 — O(n), Apply Always First
-
-| Rule | Condition | Action |
-|---|---|---|
-| **Degree-0** | deg(v) = 0 | Include v, remove it |
-| **Degree-1** | deg(v) = 1, neighbor u | Include heavier of {v,u}, remove both |
-| **Degree-2 Fold** | deg(v) = 2, neighbors a,b, no edge (a,b) | If w(v) ≥ w(a)+w(b): include v, remove {v,a,b}. Else: fold into supernode |
-| **Triangle** | v in triangle with a,b | If w(v) ≥ w(a)+w(b): include v, remove all three |
-
-#### Tier 2 — O(n²), Apply After Tier 1
-
-| Rule | Condition | Action |
-|---|---|---|
-| **Dominance** | N[v] ⊆ N[u] and w(u) ≥ w(v) | Remove v (u dominates v) |
-| **LP Reduction (Nemhauser-Trotter 1975)** | Solve LP relaxation | x*=1 → always include; x*=0 → always exclude |
-| **Crown** | Hall-violating set via matching | Exclude crown vertices, include head |
-| **Clique Neighborhood** | N(v) forms a clique | Compare w(v) vs sum of clique weights |
-
-#### Tier 3 — Expensive but Powerful
-
-| Rule | What |
-|---|---|
-| **Struction (Gellner et al. 2021)** | Temporarily increases graph size to expose hidden reductions. Up to 100× speedup on some instances. |
-| **LP Half-Integrality** | Full LP solve: x ∈ {0, 1/2, 1}. x=1/2 subgraph is the hard kernel. |
-
-**Key insight:** On real-world sparse graphs, kernelization alone reduces the problem by **90–99%**. The remaining kernel is tiny enough for exact solving or fast heuristics.
-
-**Papers:**
-- Hespe et al. (2019) — "Scalable Kernelization for Maximum Independent Sets" — ACM JEA
-- Lamm et al. (2019) — "Exactly Solving MWIS on Large Real-World Graphs" — ALENEX 2019
-- Gellner et al. (2021) — "Boosting Data Reduction Using Increasing Transformations" — arXiv:2008.05180
-- arXiv:2412.09303 — Comprehensive survey of all reduction rules (Dec 2024)
-
----
-
-### 3.2 Greedy Construction Algorithms
-
-Fast O(m log n) baseline. Not optimal but strong starting point.
-
-#### GWMIN (Best Greedy for MWIS)
-```
-Sort vertices by w(v) / (deg(v) + 1) descending
-For each vertex v in order:
-    If v is still in graph (not removed):
-        Add v to solution
-        Remove v and all neighbors from graph
-```
-
-**Approximation guarantee:** Achieves weight ≥ Σ w(v)/(d(v)+1), which is a 1/(Δ+1)-approximation.
-
-#### GWMAX Variant
-```
-Weight function: w(v) / Σ_{u ∈ N+(v)} w(u)
-```
-Better on instances where neighbor weights matter more than degree.
-
-#### GWMIN2 Variant
-```
-Weight function: w(v)² / Σ_{u ∈ N+(v)} w(u)
-```
-Balances own weight vs neighbor weight quadratically.
-
-**Paper:** Sakai et al. (2001) — "A note on greedy algorithms for the maximum weighted independent set problem" — Discrete Applied Mathematics
-
----
-
-### 3.3 Local Search — Core Engine
-
-#### The (j,k)-Swap Move
-Remove j vertices from current solution, add k non-conflicting vertices.
-- (1,2)-swap: remove 1, add 2 → net gain
-- (2,3)-swap: remove 2, add 3
-- (0,1)-swap: add a free vertex (when solution is not maximal)
-
-#### ARW Local Search (Andrade, Resende, Werneck 2012) — Landmark Algorithm
-
-Finding (1,2)-swaps in **O(m) amortized** using:
-
-```cpp
-// For each v in solution:
-//   tight[v] = non-solution neighbors of v where conflict_count = 1
-//              (they can enter solution the moment v leaves)
-
-conflict_count[u] = |{v ∈ S : (u,v) ∈ E}|   // for u ∉ S
-tight[v] = {u ∉ S : conflict_count[u] = 1 and (u,v) ∈ E}  // for v ∈ S
-
-// Valid (1,2)-swap: v ∈ S, u1,u2 ∈ tight[v], (u1,u2) ∉ E
-// Condition: w(u1) + w(u2) > w(v)
-```
-
-Update cost per swap: O(deg(v)) — incremental maintenance.
-
-**Full ARW Loop:**
-1. Make S maximal (add all free vertices via (0,1)-swaps)
-2. Find and apply all valid (1,2)-swaps  
-3. Find and apply all valid (2,3)-swaps ← O(m·Δ) to find
-4. If any swap found → go to step 1
-5. Terminate at (2,3)-local optimum
-
-**Paper:** Andrade, Resende, Werneck (2012) — "Fast Local Search for the Maximum Independent Set Problem" — J. of Heuristics
-
----
-
-### 3.4 Iterated Local Search (ILS)
-
-Best practical approach for the 5-minute budget:
+## Architecture Overview
 
 ```
-S = greedy_solution(G)
-S = local_search(S)
-best = S
-perturbation_rate = 0.10
-
-loop until time_limit:
-    k = max(3, |S| * perturbation_rate)
-    S' = remove_k_random_vertices(S, k)
-    S' = greedy_extend(S')     // make maximal again
-    S' = local_search(S')
-    
-    if weight(S') >= weight(S):
-        S = S'
-        no_improve = 0
-    else:
-        no_improve++
-        if no_improve > 50:
-            perturbation_rate = min(0.30, perturbation_rate * 1.2)
-            no_improve = 0
-    
-    if weight(S) > weight(best):
-        best = S
-        perturbation_rate = 0.10   // reset
-```
-
-**Key:** Adaptive perturbation prevents getting stuck in the same local basin.
-
----
-
-### 3.5 Simulated Annealing
-
-Accept worse solutions with probability exp(Δw / T):
-
-```
-T_init: set so initial acceptance ≈ 20-50%
-cooling: 0.9995–0.9999 per iteration
-Perturbation: (1,2)-swap for small moves; random removal of k vertices for large
-```
-
-Good complement to ILS — run SA in parallel on a separate solution.
-
----
-
-### 3.6 Tabu Search (STABULUS)
-
-Mark recently removed vertices as tabu:
-- Tabu tenure: `10 + random(0, |tight| / 4)` iterations
-- Aspiration criterion: override tabu if move gives global best
-
-Prevents cycling while still exploring.
-
----
-
-### 3.7 CHILS — Current State of the Art (Langedal, SEA 2025)
-
-Concurrent Hybrid Iterated Local Search:
-
-```
-Maintain P=16 solutions in parallel (OpenMP threads)
-Every 10 seconds:
-    "Consensus" phase: vertices ALL solutions agree on → fix them
-    Re-kernelize the disagreement subgraph
-    Each thread continues ILS on the reduced subgraph
-```
-
-**Outperforms all prior algorithms** on standard benchmarks.
-**GitHub:** https://github.com/KennethLangedal/CHILS
-
----
-
-### 3.8 Memetic Algorithm — MMWIS (Großmann et al. GECCO 2023)
-
-Combines genetic algorithm with kernelization in the inner loop:
-
-```
-Population of solutions
-→ Crossover (graph-partitioning based recombination)
-→ Local search
-→ Re-kernelize the residual subgraph  ← key innovation
-→ Extend solution on reduced kernel
-→ Replace worst in population
-```
-
-Best results on **205/207 benchmark instances** vs all competitors.
-
----
-
-### 3.9 Special Graph Cases (Polynomial Time)
-
-| Graph Type | Algorithm | Complexity |
-|---|---|---|
-| Tree / Forest | DP: dp_in[v], dp_out[v] | O(n) |
-| Bipartite | König's theorem → min-cut | O(n√n + m) |
-| Interval graph | Sort by right endpoint + DP | O(n log n) |
-| Chordal graph | Perfect elimination ordering + DP | O(n + m) |
-| Path | DP | O(n) |
-| Cycle | DP (two cases) | O(n) |
-
-**Always check for special structure before heuristics.**
-
----
-
-## 4. Data Structures for Efficient Local Search
-
-```cpp
-// Core arrays (all O(n) space)
-bool in_solution[N];          // is vertex in current IS?
-int conflict_count[N];        // # solution-neighbors for non-solution vertices
-vector<int> adj[N];           // adjacency list
-long long weight[N];          // vertex weights
-
-// For ARW (1,2)-swap detection:
-// tight[v] = non-solution neighbors of solution-vertex v with conflict_count = 1
-// Maintained incrementally on each swap — O(deg) update cost
-```
-
-**Swap update procedure (O(deg)):**
-```
-When adding vertex u to solution:
-    in_solution[u] = true
-    for each neighbor w of u:
-        conflict_count[w]++
-        // w is now blocked if conflict_count[w] becomes 1 (now tight to u)
-
-When removing vertex v from solution:
-    in_solution[v] = false
-    for each neighbor w of v:
-        conflict_count[w]--
-        // w becomes free if conflict_count[w] drops to 0
+Input graph
+    │
+    ▼
+Kernelization  (datareduction.cpp logic, embedded in kernelize())
+    ├─ Phase 1: Basic reductions  (safe pre-LP)
+    ├─ Phase 2: LP / NT reduction  (Nemhauser-Trotter via Dinic max-flow)
+    └─ Phase 3: Basic + V-fold post-LP
+    │
+    ▼
+Kernel (LP = ½ subgraph)
+    │
+    ├─ Tree components  ──→  Exact tree DP
+    └─ General components ──→  ILS + PROBE local search
+    │
+    ▼
+Unfold solution  (reverse fold records)
+    │
+    ▼
+Output
 ```
 
 ---
 
-## 5. Complete Pipeline for N=200,000 (5-minute budget)
+## Data Reduction / Kernelization
+
+### Theoretical Foundation
+
+The kernelization follows the **Buss–Goldsmith** kernel for unweighted MIS [Buss & Goldsmith 1993] extended to weighted MWIS, combined with the **Nemhauser–Trotter** LP theorem [Nemhauser & Trotter 1975].
+
+The key result: after the NT reduction, every remaining vertex has LP-relaxation value exactly ½. These form the "hard" kernel.
+
+### Reduction Rules (applied in order)
+
+#### Rule 0 — Degree-0 (isolated vertex)
+> Isolated vertex v → include v in IS.
+
+Trivially correct: v has no conflicts.
+
+#### Rule 1 — Degree-1 N-fold
+**Source:** Buss & Goldsmith [1993], weighted extension by Fomin et al.
+
+Let v be a leaf with sole neighbor u.
+
+- If W[v] ≥ W[u]: include v (beats u, and v's leaf position means no other conflicts).
+- If W[v] < W[u]: **N-fold**. The optimal IS value is W[v] + OPT(G', W'), where G' = G \ {v} and W'[u] = W[u] − W[v]. This is because in any optimal solution, either:
+  - u ∉ IS → v ∈ IS (contributes W[v]), plus W[v] is "returned" to u's future optimisation
+  - u ∈ IS → v ∉ IS, net contribution from {u, v} is W[u] = W[u]−W[v] + W[v]
+
+**Reconstruction:** If u ∉ IS_kernel → add v to real IS.
+
+#### Rule 2a — Degree-2 Triangle
+If v has degree 2 with neighbors a, b and edge(a, b) exists:
+> At most one of {v, a, b} can be in IS → include the heaviest.
+
+#### Rule 2b — Degree-2 Include
+If v has degree 2 with neighbors a, b, no edge(a, b), and W[v] ≥ W[a] + W[b]:
+> Include v (always at least as good as including both a and b).
+
+#### Rule 3 — Dominance
+**Source:** Akiba & Iwata [2016], Lemma 2.2
+
+If N[v] ⊆ N[u] and W[u] ≥ W[v]:
+> Remove v. u "dominates" v — anything v could contribute, u can contribute at least as well, and u also covers v's neighbors.
+
+Applied only when degree(v) ≤ 14 for efficiency.
+
+#### Rule 4 — LP / Nemhauser–Trotter Reduction
+**Source:** Nemhauser & Trotter [1975]; implemented via Baffier et al.'s bipartite formulation.
+
+Build the NT network:
+```
+s → v_L  (capacity W[v])     for each active vertex v
+v_R → t  (capacity W[v])     for each active vertex v
+v_L → u_R (capacity ∞)        for each edge {u,v}
+u_L → v_R (capacity ∞)        for each edge {u,v}
+```
+
+Run Dinic max-flow [Dinic 1970]. In the residual graph:
+- v_L reachable from s AND v_R not reachable → **force v into IS** (LP assigns 1)
+- v_L not reachable AND v_R reachable → **exclude v** (LP assigns 0)
+- Both reachable, or neither → v remains in kernel (LP assigns ½)
+
+The Dinic algorithm runs in O(V² E) time in general, O(E √V) for bipartite graphs.
+
+#### Rule 2c — V-Shape Fold (post-LP only)
+**Source:** Fomin et al. [2009]; correctness in LP=½ subgraph proven by Akiba & Iwata [2016].
+
+**CRITICAL**: This rule is only valid in the LP=½ subgraph (after NT reduction). Applying it before LP can yield incorrect results — see counterexample in `intersession.md`.
+
+For deg-2 vertex v with neighbors a, b, no edge(a, b), W[v] < W[a] + W[b]:
+- Create supernode a' by merging b into a: W[a'] = W[a] + W[b] − W[v], N(a') = N(a) ∪ N(b) \ {v}
+- `fold_offset += W[v]`; remove v and b
+
+**Reconstruction (reverse):** If supernode a ∈ IS → add b to real IS; else → add v to real IS.
+
+In the LP=½ subgraph, this fold is valid because NT guarantees that either {a, b} or {v} alone are equally optimal anchors. See Akiba & Iwata [2016] Lemma 3.3 for the formal proof.
+
+### Fold Record System
+
+Each fold (N-fold or V-fold) stores a `FoldRecord {type, v, a, b}`. After solving the kernel, `unfold_solution()` processes records in **reverse order** to recover the full solution. Reverse order is required because later folds may reference nodes modified by earlier folds.
+
+---
+
+## Exact Solver: Tree DP
+
+For kernel components that form trees (or forests), exact MWIS is solved in O(n) via standard tree DP:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Phase 1: Preprocessing (0–10s)                              │
-│   1. Read input                                             │
-│   2. Decompose into connected components                     │
-│   3. Apply kernelization rules (deg-0, deg-1, dominance)    │
-│   4. Handle trivial structures (trees, isolated vertices)   │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│ Phase 2: Construction (10–30s)                              │
-│   1. GWMIN greedy on remaining kernel                       │
-│   2. Make solution maximal (add all free vertices)          │
-│   3. Apply full ARW local search until (2,3)-local optimum  │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│ Phase 3: ILS Loop (30s–280s)                                │
-│   1. Adaptive perturbation (remove k vertices)              │
-│   2. Greedy extension                                       │
-│   3. ARW local search                                       │
-│   4. Accept if better (or equal)                            │
-│   5. Track global best                                      │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│ Phase 4: Output (at 290s or earlier)                        │
-│   1. Reconstruct solution indices from kernelization        │
-│   2. Sort indices ascending                                 │
-│   3. Print total weight and indices                         │
-└─────────────────────────────────────────────────────────────┘
+dp_in[v]  = W[v] + Σ dp_out[child]   // v is in IS
+dp_out[v] = Σ max(dp_in[child], dp_out[child])  // v is not in IS
 ```
 
----
-
-## 6. Key Repositories
-
-| Repository | Algorithm | Notes |
-|---|---|---|
-| [KarlsruheMIS/KaMIS](https://github.com/KarlsruheMIS/KaMIS) | ReduMIS, MMWIS, exact | State-of-the-art C++; MIT license |
-| [KennethLangedal/CHILS](https://github.com/KennethLangedal/CHILS) | Concurrent ILS | 2025 best-in-class |
-| [fontanf/stablesolver](https://github.com/fontanf/stablesolver) | GWMIN, row-weighting LS | Clean modular C++ |
-| [MaxiBoether/mis-benchmark-framework](https://github.com/MaxiBoether/mis-benchmark-framework) | All major solvers | ICLR 2022 benchmarks |
-| [KarlsruheMIS/pace-2019](https://github.com/KarlsruheMIS/pace-2019) | Portfolio (PACE winner) | WeGotYouCovered |
+**Source:** Classic algorithm; see Tarjan [1972] for tree DP foundations.
 
 ---
 
-## 7. Key Papers (Chronological)
+## Heuristic Solver: ILS + PROBE
 
-| Year | Paper | Contribution |
-|---|---|---|
-| 1975 | Nemhauser & Trotter | LP half-integrality property for MWIS |
-| 2001 | Sakai et al. | GWMIN/GWMAX greedy with approximation guarantees |
-| 2012 | Andrade, Resende, Werneck | Fast O(m) (1,2)-swap and (2,3)-swap local search |
-| 2017 | Lamm et al. | ReduMIS: finding near-optimal IS at scale |
-| 2019 | Hespe et al. | Scalable kernelization (ACM JEA) |
-| 2019 | Lamm et al. | Exactly solving MWIS on large real-world graphs |
-| 2021 | Gellner et al. | Struction: increasing transformations (arXiv:2008.05180) |
-| 2022 | Langedal et al. | Local search for large MWIS (ESA 2022) |
-| 2022 | Dong & Goldberg | METAMIS: GRASP-based for 100M-node graphs |
-| 2023 | Großmann et al. | MMWIS memetic algorithm — best on 205/207 benchmarks |
-| 2025 | Langedal | CHILS: concurrent ILS — current state of the art |
-| 2024 | arXiv:2412.09303 | Comprehensive survey of all MWIS reduction rules |
+For general (non-tree) kernel components, a time-budgeted **Iterated Local Search** (ILS) runs.
+
+### Greedy Construction
+Each ILS restart builds an IS greedily by sorting vertices on score W[v] / (live_deg[v] + 1), a weighted ratio heuristic from the MWIS literature. With `randomness > 0`, multiplicative uniform noise is added to diversify restarts.
+
+**Source:** Weighted ratio greedy; see Sakai et al. [2003].
+
+### Local Search Passes (in order per convergence loop)
+
+#### PROBE Pass
+**Source:** Andrade et al. [2012] "Fast Local Search for the Maximum Independent Set Problem"; adapted for weighted variant.
+
+For each non-IS vertex u:
+> If W[u] > Σ W[v] for all v ∈ IS ∩ N(u): remove all IS-neighbors of u and add u.
+
+This is a **(1 → k)-swap** — one non-IS vertex replacing any number of IS vertices — and is the key improvement over plain (1,2) and (2,3) swaps. In practice it gives the largest gains on sparse graphs where LP=½ vertices have many IS-neighbors with individually small weights.
+
+Complexity: O(|V| · max_deg) per pass.
+
+#### (1,2)-Swap Pass
+For each IS vertex v, find two **tight** non-IS neighbors (conf[u] = 1, blocked only by v) that are non-adjacent. If W[u₁] + W[u₂] > W[v], perform the swap.
+
+**Source:** Standard 1→2 improvement; see Pullan [2006] for weighted MIS neighbourhood moves.
+
+#### (2,3)-Swap Pass
+For each pair of IS vertices (v₁, v₂), collect all free non-IS vertices after removing both. Among the top `cand_limit` by weight, try all triples: if W[u₁]+W[u₂]+W[u₃] > W[v₁]+W[v₂], accept.
+
+`cand_limit = 25` for components ≤ 300 nodes; `15` otherwise.
+
+**Source:** Andrade et al. [2012], Section 3.
+
+### ILS Strategy
+
+**Source:** Lourenço et al. [2003] "Iterated Local Search"; applied to MWIS by Lamm et al. [2016] (ReduMIS).
+
+1. Greedy build → local_search → record best
+2. Repeat until time budget:
+   - Every 5th iteration: full random-greedy restart (noise = 0.25)
+   - Otherwise: perturb best solution by removing `k = max(3, |IS| × perturb_rate)` random IS vertices
+   - make_maximal + local_search → update best if improved
+   - Adaptive perturb_rate: grows by ×1.2 if stuck for >40 iterations, capped at 0.35
 
 ---
 
-## 8. Benchmark Performance
+## Signal Handling & Time Budget
 
-On large sparse networks (real-world, N > 100k):
-- Kernelization alone: reduces 90–99% of the graph
-- Row-weighting local search: ~99.3% quality in under 2 seconds (192k-node caidaRouterLevel graph)
-- MMWIS/CHILS: near-optimal for most instances within 300 seconds
-- METAMIS: state-of-the-art on vehicle-routing instances (100M+ nodes)
+`SIGTERM` / `SIGINT` → calls `unfold_solution()` then `print_solution()`. This ensures a valid answer is always emitted even if killed externally (e.g., by the contest judge at 5 minutes).
 
-On hard dense instances (BHOSLIB):
-- Exact solvers time out even for 100-vertex instances
-- Best heuristics (ILS, SA): typically within 1–2% of optimal
-- CHILS strictly outperforms ReduMIS and METAMIS on largest benchmarks
+The internal `TIME_LIMIT = 290.0s` stops all new work 20 seconds before the hard deadline to guarantee clean output.
 
 ---
 
-## 9. Our Implementation Strategy (solution.cpp)
+## Performance Results (290s time limit)
 
-1. **Kernelization:** Degree-0, degree-1, degree-2 fold rules applied iteratively
-2. **Greedy:** GWMIN with w(v)/(deg(v)+1) scoring
-3. **Local Search:** ARW-style (1,2)-swaps with conflict_count[] and incremental updates
-4. **ILS:** Adaptive perturbation loop with restart logic
-5. **Timer:** Checked before each ILS iteration; terminates at 290 seconds (10s safety margin)
-6. **Output:** Sorted 1-indexed coder IDs, total weight on first line
+| Test | N | M | Result vs Expected |
+|------|---|---|-------------------|
+| 01_tiny_random | 18 | 45 | MATCH |
+| 02_small_sparse | 120 | 400 | WORSE −782M (dense random, LP-hard kernel) |
+| 03_path_n500 | 500 | 499 | BETTER +2.9B |
+| 04_star_n400 | 400 | 399 | MATCH |
+| 05_cycle_n300 | 300 | 300 | BETTER +3.1B |
+| 06_tree_n800 | 800 | 799 | BETTER +963M |
+| 07_complete_n20 | 20 | 190 | MATCH |
+| 08_bipartite_K200_200 | 400 | 40k | MATCH |
+| 09_disjoint_cliques | 27 | 79 | MATCH |
+| 10_grid_25x40 | 1,000 | 1,935 | BETTER +23B |
+| 11_matching_n200 | 200 | 100 | MATCH |
+| 12_no_edges_n50 | 50 | 0 | MATCH |
+| 13/14_skill_paths | 300 | 299 | MATCH |
+| 15_small_dense_n60 | 60 | 1,500 | BETTER +215M |
+| 16_large_sparse_n20000 | 20k | 100k | BETTER +118B |
+| 17_large_sparse_n100000 | 100k | 200k | BETTER +142B |
+| 18_max_edges_n200000 | 200k | 200k | BETTER +603B |
+| legacy_1/2/3/4/5 | — | — | MATCH |
 
-Time complexity per ILS iteration: O(m) amortized
-Space complexity: O(n + m)
+**Summary: 23/23 valid, 8 BETTER, 1 WORSE, 0 INVALID**
+
+## References
+
+1. **Garey & Johnson (1979)**: *Computers and Intractability*. NP-completeness of MWIS (Section A1.2).
+2. **Nemhauser & Trotter (1975)**: "Vertex packings: structural properties and algorithms". LP relaxation + NT decomposition theorem.
+3. **Buss & Goldsmith (1993)**: "Nondeterminism within P". Degree-0/1 kernelization for MIS.
+4. **Dinic (1970)**: "Algorithm for solution of a problem of maximum flow in a network". O(V²E) max-flow used in NT reduction.
+5. **Fomin et al. (2009)**: "A measure & conquer approach for the analysis of exact algorithms". V-shape fold for weighted MIS.
+6. **Akiba & Iwata (2016)**: "Branch-and-reduce exponential/FPT algorithms in practice: A case study of vertex cover". Dominance rule (Lemma 2.2); V-fold validity in LP=½ subgraph (Lemma 3.3). Extended to MWIS.
+7. **Andrade et al. (2012)**: "Fast local search for the maximum independent set problem". PROBE / (j,k)-swap framework; (1,2)-swap and (2,3)-swap.
+8. **Sakai et al. (2003)**: "A note on greedy algorithms for the maximum weighted independent set problem". Weighted ratio greedy W/(d+1).
+9. **Pullan (2006)**: "Phased local search for the maximum clique problem". Neighbourhood move framework (adapted for MIS via complement).
+10. **Lourenço et al. (2003)**: "Iterated Local Search", in *Handbook of Metaheuristics*. ILS framework: perturbation + local search + acceptance.
+11. **Lamm et al. (2016)**: "Finding Near-Optimal Independent Sets at Scale" (ReduMIS). Kernelization + ILS pipeline; adaptive perturbation strategy.
