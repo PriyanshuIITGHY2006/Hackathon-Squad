@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MWIS Workbench</title>
+<link rel="stylesheet" href="/static/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='4' cy='5' r='2.5' fill='%2314b8c4'/><circle cx='12' cy='11' r='2.5' fill='%2314b8c4'/><path d='M4 5 L12 11' stroke='%23708090' stroke-width='1'/></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <div>
+      <h1>MWIS Workbench</h1>
+      <p class="sub">Maximum Weight Independent Set · live C++ engine</p>
+    </div>
+  </div>
+  <div class="topbar-meta">
+    <div class="cmdline" id="cmdline" title="the exact process the backend spawned">
+      <span class="dim">$</span> <span id="cmdtext">bin/mwis_engine --trace</span>
+    </div>
+    <div class="pills">
+      <span class="pill" id="buildPill" data-state="idle">engine: checking…</span>
+      <span class="pill" id="runPill" data-state="idle">idle</span>
+      <span class="pill mono" id="clockPill">0.00 s</span>
+      <button class="pill" id="themeBtn" title="switch light / dark">◐ theme</button>
+    </div>
+  </div>
+</header>
+
+<section class="controls">
+  <div class="ctl-group">
+    <h2>Instance</h2>
+    <div class="ctl-row">
+      <label for="kind">Family</label>
+      <select id="kind"></select>
+    </div>
+    <div class="ctl-row">
+      <label for="nodes">Vertices <output id="nodesOut" class="mono">80</output></label>
+      <input type="range" id="nodes" min="4" max="2000" step="1" value="80">
+    </div>
+    <div class="ctl-row">
+      <label for="density">Density <output id="densityOut" class="mono">0.06</output></label>
+      <input type="range" id="density" min="0.01" max="0.9" step="0.01" value="0.06">
+    </div>
+    <div class="ctl-row split">
+      <div>
+        <label for="seed">Seed</label>
+        <input type="number" id="seed" class="mono" value="1" min="0" step="1">
+      </div>
+      <div>
+        <label for="wmax">Max weight</label>
+        <input type="number" id="wmax" class="mono" value="100" min="1" step="1">
+      </div>
+    </div>
+    <div class="ctl-actions">
+      <button class="btn" id="genBtn">Generate</button>
+      <button class="btn ghost" id="pasteBtn">Paste / load…</button>
+    </div>
+  </div>
+
+  <div class="ctl-group">
+    <h2>Engine</h2>
+    <div class="ctl-row split">
+      <div>
+        <label for="engSeed">RNG seed</label>
+        <input type="number" id="engSeed" class="mono" value="12345" min="0" step="1">
+      </div>
+      <div>
+        <label for="stall" title="ILS iterations without improvement before a component is considered converged; 0 runs until you press Stop">Stall limit</label>
+        <input type="number" id="stall" class="mono" value="2000" min="0" step="100">
+      </div>
+    </div>
+    <div class="ctl-row split">
+      <div>
+        <label for="exactThreshold" title="components up to this size are solved to proven optimality by branch &amp; bound">Exact ≤</label>
+        <input type="number" id="exactThreshold" class="mono" value="100" min="0" max="256" step="1">
+      </div>
+      <div>
+        <label for="timeLimit" title="0 means no time limit at all">Time limit (s)</label>
+        <input type="number" id="timeLimit" class="mono" value="0" min="0" step="1">
+      </div>
+    </div>
+    <fieldset class="rules">
+      <legend>Reduction rules</legend>
+      <label><input type="checkbox" data-rule="R0" checked> <b>R0</b> isolated</label>
+      <label><input type="checkbox" data-rule="R1" checked> <b>R1</b> degree-1 / N-fold</label>
+      <label><input type="checkbox" data-rule="R2" checked> <b>R2</b> neighbourhood removal</label>
+      <label><input type="checkbox" data-rule="R3" checked> <b>R3</b> simplicial</label>
+      <label><input type="checkbox" data-rule="R4" checked> <b>R4</b> domination</label>
+      <label><input type="checkbox" data-rule="R5" checked> <b>R5</b> degree-2 V-fold</label>
+      <label><input type="checkbox" data-rule="R6" checked> <b>R6</b> twins</label>
+      <label><input type="checkbox" data-rule="R7" checked> <b>R7</b> LP / Nemhauser-Trotter</label>
+    </fieldset>
+    <label class="toggle" title="reproduce the unsound triangle and domination variants from solution.cpp">
+      <input type="checkbox" id="legacyRules"> use solution.cpp's unsound rule variants
+    </label>
+  </div>
+
+  <div class="ctl-group run-group">
+    <h2>Run</h2>
+    <div class="ctl-actions stack">
+      <button class="btn primary" id="runBtn">▶ Solve</button>
+      <button class="btn danger" id="stopBtn" disabled>■ Stop</button>
+      <button class="btn ghost" id="compareBtn">Compare solvers</button>
+      <button class="btn ghost" id="exactBtn">Certify optimum</button>
+    </div>
+    <div class="run-note" id="runNote">
+      The engine streams every decision it makes. Stop is safe at any moment — it
+      still unfolds and verifies a complete answer.
+    </div>
+  </div>
+</section>
+
+<main class="grid">
+  <section class="panel canvas-panel">
+    <div class="panel-hd">
+      <h2>Graph</h2>
+      <div class="hd-tools">
+        <span class="mono dim" id="graphMeta">no instance</span>
+        <button class="chip" id="fitBtn" title="fit the drawing to the panel">fit</button>
+        <button class="chip" id="labelsBtn" title="toggle vertex labels">labels</button>
+      </div>
+    </div>
+    <div class="canvas-wrap">
+      <canvas id="graphCanvas"></canvas>
+      <div class="canvas-empty" id="canvasEmpty">Generate an instance to begin.</div>
+      <div class="tooltip" id="tooltip" hidden></div>
+      <div class="canvas-overlay mono" id="canvasOverlay"></div>
+    </div>
+    <div class="legend">
+      <span class="chip-key"><i class="sw sw-live"></i>live</span>
+      <span class="chip-key"><i class="sw sw-in"></i>in the set</span>
+      <span class="chip-key"><i class="sw sw-out"></i>excluded</span>
+      <span class="chip-key"><i class="sw sw-fold"></i>folded</span>
+      <span class="chip-key"><i class="sw sw-kernel"></i>hard kernel</span>
+      <span class="chip-key"><i class="sw sw-touch"></i>current rule</span>
+    </div>
+  </section>
+
+  <section class="side">
+    <div class="panel">
+      <div class="panel-hd"><h2>Pipeline</h2></div>
+      <ol class="pipeline" id="pipeline">
+        <li data-stage="reduce"><span class="dot"></span><span class="lbl">Local reductions</span><span class="val mono" id="stReduce">—</span></li>
+        <li data-stage="lp"><span class="dot"></span><span class="lbl">LP / Nemhauser-Trotter</span><span class="val mono" id="stLp">—</span></li>
+        <li data-stage="kernel"><span class="dot"></span><span class="lbl">Kernel</span><span class="val mono" id="stKernel">—</span></li>
+        <li data-stage="solve"><span class="dot"></span><span class="lbl">Component solve</span><span class="val mono" id="stSolve">—</span></li>
+        <li data-stage="unfold"><span class="dot"></span><span class="lbl">Unfold</span><span class="val mono" id="stUnfold">—</span></li>
+        <li data-stage="verify"><span class="dot"></span><span class="lbl">Verify</span><span class="val mono" id="stVerify">—</span></li>
+      </ol>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hd"><h2>Live metrics</h2></div>
+      <div class="tiles">
+        <div class="tile wide accent">
+          <span class="k">Best weight</span>
+          <span class="v mono" id="mBest">0</span>
+        </div>
+        <div class="tile"><span class="k">Vertices</span><span class="v mono" id="mN">0</span></div>
+        <div class="tile"><span class="k">Edges</span><span class="v mono" id="mM">0</span></div>
+        <div class="tile"><span class="k">Live</span><span class="v mono" id="mLive">0</span></div>
+        <div class="tile"><span class="k">Kernel</span><span class="v mono" id="mKernel">—</span></div>
+        <div class="tile"><span class="k">Folds</span><span class="v mono" id="mFolds">0</span></div>
+        <div class="tile"><span class="k">Events</span><span class="v mono" id="mEvents">0</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hd">
+        <h2>Search progress</h2>
+        <span class="mono dim" id="chartMeta">best weight over time</span>
+      </div>
+      <canvas id="chartCanvas" class="chart"></canvas>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hd"><h2>Kernel components</h2></div>
+      <div class="components" id="components"><p class="empty">Nothing yet.</p></div>
+    </div>
+  </section>
+</main>
+
+<section class="panel bottom">
+  <div class="tabs" role="tablist">
+    <button class="tab active" data-tab="trace" role="tab">Decision trace</button>
+    <button class="tab" data-tab="console" role="tab">Raw stream</button>
+    <button class="tab" data-tab="rules" role="tab">Rule ledger</button>
+    <button class="tab" data-tab="correct" role="tab">Correctness</button>
+    <span class="tab-spacer"></span>
+    <label class="toggle small"><input type="checkbox" id="followTail" checked> follow</label>
+    <button class="chip" id="clearLog">clear</button>
+  </div>
+
+  <div class="tab-body" id="tab-trace">
+    <div class="tracelist" id="traceList"><p class="empty">Run the engine to see every decision it takes, in order.</p></div>
+  </div>
+  <div class="tab-body" id="tab-console" hidden>
+    <pre class="console" id="consoleOut"></pre>
+  </div>
+  <div class="tab-body" id="tab-rules" hidden>
+    <div class="ledger" id="ledger"><p class="empty">No reductions applied yet.</p></div>
+  </div>
+  <div class="tab-body" id="tab-correct" hidden>
+    <div class="correctness" id="correctness">
+      <p class="empty">Run the engine, then use <b>Compare solvers</b> or <b>Certify optimum</b>.</p>
+    </div>
+  </div>
+</section>
+
+<dialog id="pasteDialog" class="dialog">
+  <form method="dialog">
+    <h2>Load an instance</h2>
+    <p class="dim">Engine format: <code>N M</code>, then N weights, then M edge lines (1-indexed).</p>
+    <textarea id="pasteText" class="mono" rows="12" placeholder="5 4&#10;10 20 30 40 50&#10;1 2&#10;2 3&#10;3 4&#10;4 5"></textarea>
+    <div class="dialog-actions">
+      <button class="btn ghost" value="cancel">Cancel</button>
+      <button class="btn primary" id="pasteLoad" value="load">Load</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/graph.js"></script>
+<script src="/static/charts.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

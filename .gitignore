@@ -1,0 +1,4 @@
+bin/
+tests/cases/
+__pycache__/
+*.pyc
