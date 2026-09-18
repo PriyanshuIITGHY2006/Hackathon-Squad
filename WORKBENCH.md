@@ -18,12 +18,20 @@ There is no time limit unless you ask for one.
 ## Quick start
 
 ```bash
+./start.sh                # builds the engine, serves http://127.0.0.1:8000
+```
+
+Or by hand:
+
+```bash
 make -C engine            # builds bin/mwis_engine, bin/mwis_exact, bin/mwis_legacy
 python3 server/server.py  # http://127.0.0.1:8000  (builds automatically if needed)
 ```
 
 Open the page, press **Solve**. Nothing else is required — no pip install, no npm,
-no CDN, no network access.
+no CDN, no network access. You need a C++ compiler, `make` and Python 3; on Arch
+that is `sudo pacman -S --needed base-devel python`, and `start.sh` names the
+package for your distro if anything is missing.
 
 ## What is in the box
 
